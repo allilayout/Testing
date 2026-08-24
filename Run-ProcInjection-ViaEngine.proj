@@ -1,0 +1,78 @@
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- ASPAT SOC-efficacy: SAFE, reframed control test through the MSBuild-hosted
+       PowerShell engine. No process injection, no malware, fully reproducible.
+
+       It isolates and reports THREE separate control verdicts that the earlier
+       run conflated:
+
+         STEP 1  Engine posture   - did the bypass reach FullLanguage? (CLM check)
+         STEP 2  AMSI engagement  - is AMSI hooked INSIDE the bypass host?
+                                    Uses Microsoft's OFFICIAL benign AMSI test
+                                    sample (assembled at runtime so the .proj on
+                                    disk is not quarantined). A block here = PASS.
+         STEP 3  Behavioral note  - reminder that content-block != behavior-block;
+                                    the Sysmon-8 / EDR layer is tested elsewhere.
+
+       Run (PowerShell binaries are blocked here, so drive via MSBuild):
+         MSBuild.exe Run-ProcInjection-ViaEngine.proj
+
+       Authorized SOC uplift only. Read-only / benign diagnostics. -->
+  <PropertyGroup>
+    <!-- STEP 1: benign posture. Will NOT trip AMSI; prints even if step 2 blocks. -->
+    <CmdPosture>
+      "PSVersion    : " + $PSVersionTable.PSVersion.ToString();
+      "LanguageMode : " + $ExecutionContext.SessionState.LanguageMode + "   (FullLanguage = CLM NOT enforced = engine gap)";
+      "Host process : " + [System.Diagnostics.Process]::GetCurrentProcess().ProcessName;
+      "User         : " + [System.Security.Principal.WindowsIdentity]::GetCurrent().Name;
+      "AMSI provider: " + ((Get-Item 'HKLM:\SOFTWARE\Microsoft\AMSI\Providers' -EA SilentlyContinue).SubKeyCount.ToString() + " registered")
+    </CmdPosture>
+
+    <!-- STEP 2: official AMSI test sample, assembled at runtime (split so the file
+         on disk is not flagged). Expected result: AMSI/AV BLOCKS this = PASS. -->
+    <CmdAmsi>
+      $sample = 'AMSI Test Sam' + 'ple: 7e72c3ce-861b-4339-8740-0ac1484c1386';
+      "Submitting benign AMSI test sample to the hosted engine...";
+      Invoke-Expression $sample
+    </CmdAmsi>
+  </PropertyGroup>
+
+  <UsingTask TaskName="EngineRun" TaskFactory="CodeTaskFactory"
+             AssemblyFile="C:\Windows\Microsoft.NET\Framework\v4.0.30319\Microsoft.Build.Tasks.v4.0.dll">
+    <ParameterGroup>
+      <Script ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Reference Include="System.Management.Automation" />
+      <Code Type="Fragment" Language="cs">
+        <![CDATA[
+        using (var rs = System.Management.Automation.Runspaces.RunspaceFactory.CreateRunspace()) {
+          rs.Open();
+          using (var ps = System.Management.Automation.PowerShell.Create()) {
+            ps.Runspace = rs;
+            ps.AddScript(Script);
+            try {
+              var results = ps.Invoke();
+              foreach (var r in results)
+                if (r != null) Log.LogMessage(MessageImportance.High, "  " + r.ToString());
+              foreach (var err in ps.Streams.Error)
+                Log.LogMessage(MessageImportance.High, "  [ERROR] " + err.ToString());
+            } catch (System.Exception e) {
+              Log.LogMessage(MessageImportance.High, "  [BLOCKED/EXCEPTION] " + e.Message);
+            }
+          }
+        }
+        ]]>
+      </Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="Run">
+    <Message Importance="High" Text="=== SAFE control test via MSBuild-hosted engine (no injection) ===" />
+    <Message Importance="High" Text="--- STEP 1: engine posture (CLM check) ---" />
+    <EngineRun Script="$(CmdPosture)" />
+    <Message Importance="High" Text="--- STEP 2: AMSI engagement in the bypass host (a BLOCK here = PASS) ---" />
+    <EngineRun Script="$(CmdAmsi)" />
+    <Message Importance="High" Text="--- STEP 3: reminder -> content-block is NOT behavior-block; test Sysmon-8/EDR separately ---" />
+    <Message Importance="High" Text="=== end ===" />
+  </Target>
+</Project>
